@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,13 +6,18 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, ArrowRight, Brain, Check } from "lucide-react";
+import { ArrowLeft, ArrowRight, Brain, Check, Loader2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
+import { generateFollowUpQuestions } from "@/services/aiService";
+import { toast } from "sonner";
+import { getApiKey } from "@/services/aiService";
 
 const Assessment = () => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
+  const [aiQuestions, setAiQuestions] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   const steps = [
     {
@@ -38,6 +42,58 @@ const Assessment = () => {
       isAI: true
     }
   ];
+
+  // When we reach the AI questions step, generate personalized questions
+  useEffect(() => {
+    const fetchAiQuestions = async () => {
+      if (currentStep === 4) {
+        // Check for API key before making requests
+        const apiKey = getApiKey() || localStorage.getItem("gemini_api_key");
+        
+        if (!apiKey) {
+          toast.error("No API key found. Please add your Gemini API key in profile settings.", {
+            action: {
+              label: "Go to Settings",
+              onClick: () => navigate("/profile")
+            }
+          });
+          // Load fallback questions
+          setAiQuestions([
+            {
+              id: "fallback_1",
+              question: "Given your energy concerns and stress levels, how do you typically feel in the afternoon?",
+              type: "select",
+              options: ["Still energetic and focused", "Slight energy dip but manageable", "Noticeably tired and sluggish", "Significant crash, need caffeine/snacks"]
+            },
+            {
+              id: "fallback_2",
+              question: "Do you experience any of these symptoms regularly?",
+              type: "checkbox",
+              options: ["Brain fog", "Mood swings", "Cravings for sugar", "Difficulty concentrating", "Frequent colds", "Joint stiffness", "None of the above"]
+            },
+            {
+              id: "fallback_3",
+              question: "Have you tried supplements before? What was your experience?",
+              type: "text"
+            }
+          ]);
+          return;
+        }
+        
+        try {
+          setIsLoading(true);
+          const questions = await generateFollowUpQuestions(answers);
+          setAiQuestions(questions);
+        } catch (error) {
+          console.error("Error generating AI questions:", error);
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchAiQuestions();
+  }, [currentStep, answers, navigate]);
 
   const updateAnswer = (key: string, value: any) => {
     setAnswers(prev => ({ ...prev, [key]: value }));
@@ -345,66 +401,84 @@ const Assessment = () => {
               </p>
             </div>
 
-            <div className="space-y-6">
-              <div>
-                <Label htmlFor="ai_question_1">Given your energy concerns and stress levels, how do you typically feel in the afternoon?</Label>
-                <Select onValueChange={(value) => updateAnswer("ai_question_1", value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select your typical afternoon experience" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="energetic">Still energetic and focused</SelectItem>
-                    <SelectItem value="slight-dip">Slight energy dip but manageable</SelectItem>
-                    <SelectItem value="tired">Noticeably tired and sluggish</SelectItem>
-                    <SelectItem value="crash">Significant crash, need caffeine/snacks</SelectItem>
-                  </SelectContent>
-                </Select>
+            {isLoading ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
+                <p className="text-gray-600">Generating personalized questions...</p>
               </div>
-
-              <div>
-                <Label htmlFor="ai_question_2">Do you experience any of these symptoms regularly?</Label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                  {[
-                    "Brain fog",
-                    "Mood swings",
-                    "Cravings for sugar",
-                    "Difficulty concentrating",
-                    "Frequent colds",
-                    "Joint stiffness",
-                    "None of the above"
-                  ].map((symptom) => (
-                    <div key={symptom} className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        id={symptom}
-                        checked={answers.ai_symptoms?.includes(symptom) || false}
-                        onChange={(e) => {
-                          const currentSymptoms = answers.ai_symptoms || [];
-                          if (e.target.checked) {
-                            updateAnswer("ai_symptoms", [...currentSymptoms, symptom]);
-                          } else {
-                            updateAnswer("ai_symptoms", currentSymptoms.filter((s: string) => s !== symptom));
-                          }
-                        }}
-                        className="rounded border-gray-300"
+            ) : (
+              <div className="space-y-6">
+                {aiQuestions.map((q, index) => (
+                  <div key={q.id} className="space-y-2">
+                    <Label htmlFor={q.id}>{q.question}</Label>
+                    
+                    {q.type === "text" && (
+                      <Textarea
+                        id={q.id}
+                        placeholder="Enter your answer..."
+                        value={answers[q.id] || ""}
+                        onChange={(e) => updateAnswer(q.id, e.target.value)}
+                        rows={4}
                       />
-                      <Label htmlFor={symptom} className="text-sm">{symptom}</Label>
-                    </div>
-                  ))}
-                </div>
+                    )}
+                    
+                    {q.type === "select" && (
+                      <Select onValueChange={(value) => updateAnswer(q.id, value)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select an option" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {q.options?.map((option: string) => (
+                            <SelectItem key={option} value={option}>
+                              {option}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    
+                    {q.type === "checkbox" && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                        {q.options?.map((option: string) => (
+                          <div key={option} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`${q.id}-${option}`}
+                              checked={answers[q.id]?.includes(option) || false}
+                              onChange={(e) => {
+                                const currentOptions = answers[q.id] || [];
+                                if (e.target.checked) {
+                                  updateAnswer(q.id, [...currentOptions, option]);
+                                } else {
+                                  updateAnswer(q.id, currentOptions.filter((o: string) => o !== option));
+                                }
+                              }}
+                              className="rounded border-gray-300"
+                            />
+                            <Label htmlFor={`${q.id}-${option}`} className="text-sm">{option}</Label>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {q.type === "scale" && (
+                      <Select onValueChange={(value) => updateAnswer(q.id, value)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a value on the scale" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((level) => (
+                            <SelectItem key={level} value={level.toString()}>
+                              {level} - {level <= 3 ? "Low" : level <= 6 ? "Moderate" : level <= 8 ? "Good" : "Excellent"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                ))}
               </div>
-
-              <div>
-                <Label htmlFor="supplement_experience">Have you tried supplements before? What was your experience?</Label>
-                <Textarea
-                  id="supplement_experience"
-                  placeholder="Tell us about any supplements you've tried, what worked, what didn't, and any side effects..."
-                  value={answers.supplement_experience || ""}
-                  onChange={(e) => updateAnswer("supplement_experience", e.target.value)}
-                  rows={4}
-                />
-              </div>
-            </div>
+            )}
           </div>
         );
 
@@ -483,7 +557,11 @@ const Assessment = () => {
               <Button
                 onClick={nextStep}
                 className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700 text-white flex items-center space-x-2"
+                disabled={isLoading}
               >
+                {isLoading && currentStep === steps.length - 1 ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : null}
                 <span>{currentStep === steps.length - 1 ? "Get My Recommendations" : "Next"}</span>
                 {currentStep === steps.length - 1 ? <Check className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
               </Button>

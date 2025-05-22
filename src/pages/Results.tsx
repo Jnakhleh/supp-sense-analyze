@@ -1,17 +1,110 @@
 
-import { useLocation, Link } from "react-router-dom";
+import { useLocation, Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, RefreshCw, Star, Clock, TrendingUp, Shield, Heart } from "lucide-react";
+import { ArrowLeft, RefreshCw, Star, Clock, TrendingUp, Shield, Heart, Loader2 } from "lucide-react";
+import { generateHealthAnalysis, generateRecommendations, getApiKey } from "@/services/aiService";
+import { toast } from "sonner";
 
 const Results = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const answers = location.state?.answers || {};
+  
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [healthAnalysis, setHealthAnalysis] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchResults = async () => {
+      // Check if we have answers to analyze
+      if (Object.keys(answers).length === 0) {
+        toast.error("No assessment data found. Please complete the assessment first.");
+        navigate("/assessment");
+        return;
+      }
+
+      // Check for API key before making requests
+      const apiKey = getApiKey() || localStorage.getItem("gemini_api_key");
+      
+      if (!apiKey) {
+        toast.error("No API key found. Please add your Gemini API key in profile settings.", {
+          action: {
+            label: "Go to Settings",
+            onClick: () => navigate("/profile")
+          }
+        });
+        // Load fallback results
+        setRecommendations(generateRecommendationsFromMock());
+        setHealthAnalysis(`
+          Based on your comprehensive health assessment, our AI has identified several key patterns in your health profile:
+
+          **Energy & Metabolic Health**: Your reported afternoon energy crashes combined with stress levels suggest potential issues with blood sugar regulation and adrenal function. The combination of moderate stress levels and suboptimal sleep quality creates a cycle that impacts your energy production at the cellular level.
+
+          **Nutritional Gaps**: Your dietary patterns and lifestyle factors indicate likely deficiencies in key nutrients, particularly vitamin D, magnesium, and B-vitamins. These deficiencies commonly occur together and compound each other's effects on energy and mood.
+
+          **Sleep & Recovery**: Your sleep quality assessment reveals opportunities for improvement in recovery and restoration. Poor sleep quality directly impacts hormone production, immune function, and cognitive performance.
+
+          **Digestive Health**: The digestive symptoms you mentioned suggest gut microbiome imbalance, which affects nutrient absorption and can contribute to systemic inflammation and immune dysfunction.
+
+          **Stress Response**: Your stress levels, combined with the other factors, indicate your body may be in a chronic state of low-level stress, depleting key nutrients and affecting your body's ability to recover and maintain optimal function.
+        `);
+        setIsLoading(false);
+        return;
+      }
+      
+      try {
+        setIsLoading(true);
+        // Parallel API calls to improve loading time
+        const [analysisResult, recommendationsResult] = await Promise.all([
+          generateHealthAnalysis(answers),
+          generateRecommendations(answers)
+        ]);
+        
+        setHealthAnalysis(analysisResult);
+        setRecommendations(addIconsToRecommendations(recommendationsResult));
+      } catch (error) {
+        console.error("Error generating results:", error);
+        // Use fallback data in case of errors
+        setRecommendations(generateRecommendationsFromMock());
+        toast.error("There was an error generating your recommendations. Using sample data instead.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchResults();
+  }, [answers, navigate]);
+
+  const addIconsToRecommendations = (recs: any[]) => {
+    const icons = {
+      "vitamin": <Star className="w-5 h-5" />,
+      "magnesium": <Clock className="w-5 h-5" />,
+      "omega": <Heart className="w-5 h-5" />,
+      "b-complex": <TrendingUp className="w-5 h-5" />,
+      "probiotic": <Shield className="w-5 h-5" />,
+      "default": <Star className="w-5 h-5" />
+    };
+
+    return recs.map(rec => {
+      const name = rec.name.toLowerCase();
+      let icon = icons.default;
+      
+      if (name.includes("vitamin")) icon = icons.vitamin;
+      else if (name.includes("magnesium")) icon = icons.magnesium;
+      else if (name.includes("omega")) icon = icons.omega;
+      else if (name.includes("b-complex") || name.includes("b complex")) icon = icons["b-complex"];
+      else if (name.includes("probiotic")) icon = icons.probiotic;
+      
+      return {...rec, icon};
+    });
+  };
 
   // Mock AI-generated recommendations based on user answers
-  const generateRecommendations = () => {
+  const generateRecommendationsFromMock = () => {
     const recommendations = [
       {
         id: 1,
@@ -73,23 +166,8 @@ const Results = () => {
     return recommendations;
   };
 
-  const recommendations = generateRecommendations();
   const highPriority = recommendations.filter(r => r.priority === "high");
   const mediumPriority = recommendations.filter(r => r.priority === "medium");
-
-  const healthAnalysis = `
-    Based on your comprehensive health assessment, our AI has identified several key patterns in your health profile:
-
-    **Energy & Metabolic Health**: Your reported afternoon energy crashes combined with stress levels suggest potential issues with blood sugar regulation and adrenal function. The combination of moderate stress levels and suboptimal sleep quality creates a cycle that impacts your energy production at the cellular level.
-
-    **Nutritional Gaps**: Your dietary patterns and lifestyle factors indicate likely deficiencies in key nutrients, particularly vitamin D, magnesium, and B-vitamins. These deficiencies commonly occur together and compound each other's effects on energy and mood.
-
-    **Sleep & Recovery**: Your sleep quality assessment reveals opportunities for improvement in recovery and restoration. Poor sleep quality directly impacts hormone production, immune function, and cognitive performance.
-
-    **Digestive Health**: The digestive symptoms you mentioned suggest gut microbiome imbalance, which affects nutrient absorption and can contribute to systemic inflammation and immune dysfunction.
-
-    **Stress Response**: Your stress levels, combined with the other factors, indicate your body may be in a chronic state of low-level stress, depleting key nutrients and affecting your body's ability to recover and maintain optimal function.
-  `;
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -103,6 +181,19 @@ const Results = () => {
         return "bg-gray-100 text-gray-800 border-gray-200";
     }
   };
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 flex flex-col items-center justify-center">
+        <Loader2 className="w-16 h-16 text-blue-600 animate-spin mb-8" />
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">Analyzing Your Results</h2>
+        <p className="text-gray-600 max-w-md text-center">
+          Our AI is processing your health data to create personalized recommendations just for you.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
@@ -185,7 +276,7 @@ const Results = () => {
                       <div>
                         <h4 className="font-medium text-gray-900 mb-2">Key Benefits:</h4>
                         <ul className="text-sm text-gray-600 space-y-1">
-                          {rec.benefits.map((benefit, index) => (
+                          {rec.benefits.map((benefit: string, index: number) => (
                             <li key={index} className="flex items-center space-x-2">
                               <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
                               <span>{benefit}</span>
@@ -231,7 +322,7 @@ const Results = () => {
                       <div>
                         <h4 className="font-medium text-gray-900 mb-2">Key Benefits:</h4>
                         <ul className="text-sm text-gray-600 space-y-1">
-                          {rec.benefits.map((benefit, index) => (
+                          {rec.benefits.map((benefit: string, index: number) => (
                             <li key={index} className="flex items-center space-x-2">
                               <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
                               <span>{benefit}</span>
